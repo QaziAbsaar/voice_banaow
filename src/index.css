@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #0a0a0f;
+  color: #f0f0f5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #111118;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a3a;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a4a;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: #1a1a24;
+  border-radius: 3px;
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #7c3aed;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: #6d28d9;
+  transform: scale(1.1);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #7c3aed;
+  cursor: pointer;
+  border: none;
+}
+
+input[type="range"].range-fill {
+  background: linear-gradient(to right, #7c3aed 0%, #7c3aed var(--fill), #1a1a24 var(--fill), #1a1a24 100%);
+}
+
+.dropzone {
+  border: 2px dashed #2a2a3a;
+  border-radius: 12px;
+  padding: 2rem;
+  text-align: center;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+.dropzone:hover,
+.dropzone.active {
+  border-color: #7c3aed;
+  background: rgba(124, 58, 237, 0.05);
+}
+.dropzone.has-file {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.05);
+}
+
+.toast {
+  animation: slideIn 0.3s ease-out, fadeOut 0.3s ease-in 3.7s forwards;
+}
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.spinner {
+  border: 2px solid #2a2a3a;
+  border-top-color: #7c3aed;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  animation: spin 0.6s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

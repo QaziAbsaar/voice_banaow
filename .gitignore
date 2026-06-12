@@ -1,0 +1,15 @@
+node_modules/
+dist/
+venv/
+__pycache__/
+*.pyc
+.env
+temp/
+audio_output/*
+!audio_output/.gitkeep
+models/*.pth
+models/*.index
+training_data/raw/*
+training_data/vocals/*
+*.wav
+.DS_Store
