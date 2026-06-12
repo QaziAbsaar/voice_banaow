@@ -9,6 +9,7 @@ import {
 export default function TrainPage({ api, addToast }) {
   const [files, setFiles] = useState([]);
   const [preparing, setPreparing] = useState(false);
+  const [hasBackgroundMusic, setHasBackgroundMusic] = useState(true);
   const [prepResult, setPrepResult] = useState(null);
   const [currentFile, setCurrentFile] = useState('');
   const [packaging, setPackaging] = useState(false);
@@ -39,6 +40,7 @@ export default function TrainPage({ api, addToast }) {
 
     const formData = new FormData();
     files.forEach(f => formData.append('source_files', f));
+    formData.append('has_background_music', hasBackgroundMusic);
 
     try {
       const res = await axios.post(`${api}/training/prepare`, formData, {
@@ -93,9 +95,43 @@ export default function TrainPage({ api, addToast }) {
       <div className="bg-forge-card border border-forge-border rounded-xl p-6 mb-6">
         <h2 className="text-lg font-semibold mb-1">1. Upload Training Audio</h2>
         <p className="text-sm text-forge-text-secondary mb-4">
-          Upload 5-20 minutes of audio for best results. Full songs with music are fine —
-          we'll extract the vocals automatically.
+          Upload 5-20 minutes of audio for best results.
         </p>
+
+        {/* Audio source toggle */}
+        <div className="flex gap-3 mb-4">
+          <button
+            onClick={() => setHasBackgroundMusic(true)}
+            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 border ${
+              hasBackgroundMusic
+                ? 'bg-forge-accent/10 border-forge-accent text-forge-accent'
+                : 'bg-forge-input border-forge-border text-forge-text-secondary hover:border-forge-border/70'
+            }`}
+          >
+            <span className="block text-xs opacity-70 mb-0.5">Source</span>
+            Full songs with music
+          </button>
+          <button
+            onClick={() => setHasBackgroundMusic(false)}
+            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 border ${
+              !hasBackgroundMusic
+                ? 'bg-forge-accent/10 border-forge-accent text-forge-accent'
+                : 'bg-forge-input border-forge-border text-forge-text-secondary hover:border-forge-border/70'
+            }`}
+          >
+            <span className="block text-xs opacity-70 mb-0.5">Source</span>
+            Clean vocals only
+          </button>
+        </div>
+        {hasBackgroundMusic ? (
+          <p className="text-xs text-forge-text-secondary mb-3 flex items-center gap-1">
+            <Music size={12} /> Demucs will strip background music — takes 2-5 min per song on CPU
+          </p>
+        ) : (
+          <p className="text-xs text-forge-success mb-3 flex items-center gap-1">
+            <CheckCircle size={12} /> No separation needed — files used as-is, instant processing
+          </p>
+        )}
 
         {/* Dropzone */}
         <div
@@ -345,7 +381,7 @@ export default function TrainPage({ api, addToast }) {
         <div className="flex gap-3">
           <button
             onClick={() => window.open(
-              'https://colab.research.google.com/github/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/blob/main/Colab_train.ipynb',
+              'https://colab.research.google.com/github/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/blob/main/Retrieval_based_Voice_Conversion_WebUI_v2.ipynb',
               '_blank'
             )}
             className="flex-1 py-3 bg-forge-input border border-forge-border text-forge-text

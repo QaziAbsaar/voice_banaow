@@ -6,6 +6,8 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+import librosa
+
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -327,8 +329,11 @@ async def serve_audio(filename: str):
 
 
 @app.post("/training/prepare")
-async def prepare_training(source_files: list[UploadFile] = File(...)):
-    """Upload MP3s, extract vocals via Demucs, prepare for training."""
+async def prepare_training(
+    source_files: list[UploadFile] = File(...),
+    has_background_music: bool = Form(True),
+):
+    """Upload MP3s, extract vocals via Demucs if needed, prepare for training."""
     if not source_files:
         raise HTTPException(status_code=400, detail="No files provided")
 
@@ -352,20 +357,31 @@ async def prepare_training(source_files: list[UploadFile] = File(...)):
             await f.write(content)
 
         vocals_dest_dir = ensure_dir(os.path.join(TRAINING_VOCALS_DIR, file_id))
+        final_vocals = os.path.join(vocals_dest_dir, "vocals.wav")
 
-        try:
-            result = separate_vocals(raw_path, str(TRAINING_DATA_DIR))
-            # Move vocals to organized dir
-            final_vocals = os.path.join(vocals_dest_dir, "vocals.wav")
-            if os.path.exists(result["vocals_path"]):
-                shutil.move(result["vocals_path"], final_vocals)
-                prepared_files.append(final_vocals)
-                total_duration += result["duration"]
-            logger.info(f"Prepared: {source.filename} -> {final_vocals}")
-        except RuntimeError as e:
-            errors.append(f"{source.filename}: {str(e)}")
-            logger.error(f"Failed to process {source.filename}: {e}")
-            continue
+        if has_background_music:
+            # Run Demucs to strip music
+            try:
+                result = separate_vocals(raw_path, str(TRAINING_DATA_DIR))
+                if os.path.exists(result["vocals_path"]):
+                    shutil.move(result["vocals_path"], final_vocals)
+                    prepared_files.append(final_vocals)
+                    total_duration += result["duration"]
+                logger.info(f"Demucs: {source.filename} -> {final_vocals}")
+            except RuntimeError as e:
+                errors.append(f"{source.filename}: {str(e)}")
+                logger.error(f"Failed to process {source.filename}: {e}")
+                continue
+        else:
+            # Already clean vocals — copy directly, no Demucs
+            shutil.copy2(raw_path, final_vocals)
+            try:
+                dur = librosa.get_duration(path=final_vocals)
+            except Exception:
+                dur = 0
+            prepared_files.append(final_vocals)
+            total_duration += dur
+            logger.info(f"Direct copy (clean vocals): {source.filename} -> {final_vocals}")
 
     ready = total_duration > 300  # > 5 minutes in seconds
 
