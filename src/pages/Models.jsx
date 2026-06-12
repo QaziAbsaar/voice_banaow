@@ -41,8 +41,14 @@ export default function ModelsPage({ api, addToast }) {
     }
   };
 
-  const openModelsFolder = () => {
-    window.electronAPI?.openModelsFolder();
+  const openModelsFolder = async () => {
+    try {
+      const res = await axios.get(`${api}/models/path`);
+      navigator.clipboard.writeText(res.data.path);
+      addToast('Models folder path copied to clipboard', 'info');
+    } catch {
+      addToast('Could not fetch models path', 'error');
+    }
   };
 
   return (

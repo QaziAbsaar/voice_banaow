@@ -11,6 +11,7 @@ import librosa
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 import aiofiles
 import uvicorn
 
@@ -282,6 +283,12 @@ async def text_to_speech(
     }
 
 
+@app.get("/models/path")
+async def get_models_path():
+    """Return the absolute path to the models directory."""
+    return {"path": str(MODELS_DIR.resolve())}
+
+
 @app.get("/models/list")
 async def list_models():
     """List all available models with metadata."""
@@ -446,6 +453,11 @@ def _cleanup_temp(temp_dir: str):
     except Exception:
         pass
 
+
+# Serve built frontend in production (dist folder)
+dist_dir = BASE_DIR / "dist"
+if dist_dir.exists():
+    app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
 
 if __name__ == "__main__":
     logger.info("Starting VoiceForge backend on port 8765...")

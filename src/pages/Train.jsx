@@ -77,6 +77,16 @@ export default function TrainPage({ api, addToast }) {
     addToast('Copied to clipboard', 'info');
   };
 
+  const openModelsFolder = async () => {
+    try {
+      const res = await axios.get(`${api}/models/path`);
+      copyToClipboard(res.data.path);
+      addToast(`Models folder path copied: ${res.data.path}`, 'info');
+    } catch {
+      addToast('Could not fetch models path', 'error');
+    }
+  };
+
   const formatDuration = (minutes) => {
     if (minutes < 1) return '< 1 minute';
     const m = Math.floor(minutes);
@@ -358,7 +368,7 @@ export default function TrainPage({ api, addToast }) {
                   Open Custom Notebook
                 </button>
                 <button
-                  onClick={() => window.electronAPI?.openModelsFolder()}
+                  onClick={openModelsFolder}
                   className="flex-1 py-3 bg-forge-input border border-forge-border text-forge-text
                              rounded-lg font-medium hover:bg-forge-border/50 transition-colors
                              flex items-center justify-center gap-2"
@@ -392,7 +402,7 @@ export default function TrainPage({ api, addToast }) {
             Standard RVC Notebook
           </button>
           <button
-            onClick={() => window.electronAPI?.openModelsFolder()}
+            onClick={openModelsFolder}
             className="flex-1 py-3 bg-forge-input border border-forge-border text-forge-text
                        rounded-lg text-sm font-medium hover:bg-forge-border/50 transition-colors
                        flex items-center justify-center gap-2"
