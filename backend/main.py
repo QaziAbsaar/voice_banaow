@@ -7,10 +7,11 @@ from datetime import datetime
 from pathlib import Path
 
 import librosa
+from dotenv import load_dotenv
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import aiofiles
 import uvicorn
@@ -22,6 +23,10 @@ from colab_package import package_for_colab
 from utils import (
     preprocess_audio, get_audio_duration, check_audio_quality,
     generate_output_filename, ensure_dir, convert_to_mp3
+)
+from google_drive import (
+    get_auth_url, handle_callback, is_authenticated, revoke_auth,
+    get_model_folder, upload_file, scan_model_folder, download_file,
 )
 
 logging.basicConfig(
@@ -45,6 +50,9 @@ for d in [MODELS_DIR, AUDIO_OUTPUT_DIR, TRAINING_DATA_DIR, TRAINING_VOCALS_DIR, 
 
 _set_models_dir(str(MODELS_DIR))
 
+# Load .env (Google OAuth credentials)
+load_dotenv(BASE_DIR / "backend" / ".env")
+
 # ── FastAPI App ─────────────────────────────────────────────────────────────
 app = FastAPI(title="VoiceForge Backend", version="0.1.0")
 
@@ -66,10 +74,16 @@ async def startup():
         tts_status = f"✓ ({tts_backend})"
     except RuntimeError:
         tts_status = "✗"
+    try:
+        drive_ok = is_authenticated()
+        drive_status = "✓" if drive_ok else "✗ (no token)"
+    except Exception:
+        drive_status = "✗"
     logger.info(
         f"VoiceForge backend ready. Models: {model_count}, "
         f"RVC: {'✓' if rvc_ok else '✗'}, "
-        f"TTS: {tts_status}"
+        f"TTS: {tts_status}, "
+        f"Drive: {drive_status}"
     )
 
 
@@ -475,6 +489,198 @@ async def download_training_package():
         filename=package["zip_name"],
         media_type="application/zip",
     )
+
+
+# ── Google Drive Auth Routes ──────────────────────────────────────────────
+
+REDIRECT_URI = "http://localhost:8765/auth/google/callback"
+
+
+@app.get("/auth/google/url")
+async def auth_google_url():
+    """Get Google OAuth consent URL for Drive access."""
+    try:
+        url = get_auth_url(REDIRECT_URI)
+        return {"url": url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate auth URL: {str(e)}")
+
+
+@app.get("/auth/google/callback")
+async def auth_google_callback(code: str):
+    """Handle OAuth callback — exchange code for token."""
+    try:
+        handle_callback(code, REDIRECT_URI)
+        # Redirect user back to frontend Train page
+        return RedirectResponse(url="http://localhost:5173/train")
+    except Exception as e:
+        logger.error("OAuth callback failed: %s", e)
+        raise HTTPException(status_code=400, detail=f"OAuth failed: {str(e)}")
+
+
+@app.get("/auth/google/status")
+async def auth_google_status():
+    """Check if Drive is authenticated."""
+    return {"authenticated": is_authenticated()}
+
+
+@app.post("/auth/google/revoke")
+async def auth_google_revoke():
+    """Remove stored Drive token."""
+    ok = revoke_auth()
+    return {"revoked": ok}
+
+
+# ── One-click Training Flow ──────────────────────────────────────────────
+
+
+@app.post("/training/start")
+async def start_training(
+    source_files: list[UploadFile] = File(...),
+    model_name: str = Form(...),
+    has_background_music: bool = Form(True),
+):
+    """
+    One-click training pipeline:
+      1. Prepare vocals (Demucs if needed)
+      2. Package zip
+      3. Upload zip to Google Drive VoiceForge/{model_name}/
+      4. Return pre-filled Colab URL
+    """
+    if not source_files:
+        raise HTTPException(status_code=400, detail="No files provided")
+    if not model_name.strip():
+        raise HTTPException(status_code=400, detail="model_name is required")
+
+    if not is_authenticated():
+        raise HTTPException(
+            status_code=401,
+            detail="Google Drive not authenticated. Call POST /training/start after auth.",
+        )
+
+    clean_name = model_name.strip().replace(" ", "_").replace("/", "_")
+    file_id = uuid.uuid4().hex
+
+    # Step 1 — Prepare vocals
+    prepared_files = []
+    total_duration = 0.0
+    errors = []
+
+    for source in source_files:
+        if not source.filename:
+            continue
+        ext = Path(source.filename).suffix.lower()
+        if ext not in (".mp3", ".wav", ".m4a", ".flac", ".ogg"):
+            errors.append(f"{source.filename}: unsupported format")
+            continue
+
+        raw_path = os.path.join(TRAINING_RAW_DIR, f"{file_id}{ext}")
+        async with aiofiles.open(raw_path, "wb") as f:
+            content = await source.read()
+            await f.write(content)
+
+        vocals_dest_dir = ensure_dir(os.path.join(TRAINING_VOCALS_DIR, file_id))
+        final_vocals = os.path.join(vocals_dest_dir, "vocals.wav")
+
+        if has_background_music:
+            try:
+                result = separate_vocals(raw_path, str(TRAINING_DATA_DIR))
+                if os.path.exists(result["vocals_path"]):
+                    shutil.move(result["vocals_path"], final_vocals)
+                    prepared_files.append(final_vocals)
+                    total_duration += result["duration"]
+            except RuntimeError as e:
+                errors.append(f"{source.filename}: {str(e)}")
+                continue
+        else:
+            shutil.copy2(raw_path, final_vocals)
+            try:
+                dur = librosa.get_duration(path=final_vocals)
+            except Exception:
+                dur = 0
+            prepared_files.append(final_vocals)
+            total_duration += dur
+
+    if not prepared_files:
+        raise HTTPException(status_code=400, detail="No vocals could be prepared")
+
+    # Step 2 — Package zip
+    temp_dir = ensure_dir(os.path.join(BASE_DIR, "temp", f"train_{file_id}"))
+    pkg = package_for_colab(vocals_dir=str(TRAINING_VOCALS_DIR), output_dir=temp_dir)
+
+    if pkg.get("error"):
+        raise HTTPException(status_code=400, detail=pkg["error"])
+
+    # Step 3 — Upload to Google Drive
+    try:
+        model_folder_id = get_model_folder(clean_name)
+        drive_file = upload_file(pkg["zip_path"], model_folder_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Drive upload failed: {str(e)}")
+
+    # Step 4 — Build Colab URL with model name pre-filled
+    colab_url = (
+        "https://colab.research.google.com/github/QaziAbsaar/"
+        "voice_banaow/blob/main/colab/voiceforge_train.ipynb"
+        f"#model_name={clean_name}"
+    )
+
+    return {
+        "model_name": clean_name,
+        "prepared_files": len(prepared_files),
+        "total_duration_minutes": round(total_duration / 60, 2),
+        "total_size_mb": pkg["total_size_mb"],
+        "zip_name": pkg["zip_name"],
+        "drive_file_id": drive_file["id"],
+        "colab_url": colab_url,
+        "errors": errors,
+    }
+
+
+@app.post("/training/import-model")
+async def import_model_from_drive(model_name: str = Form(...)):
+    """
+    Scan Drive VoiceForge/{model_name}/ for .pth and .index,
+    download them into the local /models directory.
+    """
+    if not model_name.strip():
+        raise HTTPException(status_code=400, detail="model_name is required")
+
+    clean_name = model_name.strip().replace(" ", "_").replace("/", "_")
+
+    if not is_authenticated():
+        raise HTTPException(status_code=401, detail="Google Drive not authenticated. Connect first.")
+
+    try:
+        files = scan_model_folder(clean_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Drive scan failed: {str(e)}")
+
+    if not files.get("pth"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No .pth found in Drive VoiceForge/{clean_name}/. "
+            "Make sure Colab training completed.",
+        )
+
+    imported = []
+
+    # Download .pth
+    pth_dest = MODELS_DIR / f"{clean_name}.pth"
+    download_file(files["pth"]["id"], str(pth_dest))
+    imported.append(f"{clean_name}.pth")
+
+    # Download .index if exists
+    if files.get("index"):
+        idx_dest = MODELS_DIR / f"{clean_name}.index"
+        download_file(files["index"]["id"], str(idx_dest))
+        imported.append(f"{clean_name}.index")
+
+    return {
+        "imported": imported,
+        "model_name": clean_name,
+        "message": f"Model '{clean_name}' imported successfully. Ready to use on Convert and TTS pages.",
+    }
 
 
 def _cleanup_temp(temp_dir: str):
