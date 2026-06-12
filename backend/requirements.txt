@@ -8,3 +8,5 @@ pydub>=0.25.1
 ffmpeg-python>=0.2.0
 numpy>=1.26.4
 aiofiles>=23.2.1
+gtts>=2.5.0
+# TTS (XTTS) optional — pip install TTS for voice cloning quality

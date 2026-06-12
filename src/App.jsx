@@ -6,13 +6,13 @@ import {
   Mic,
   Music,
   Box,
-  Github,
-  Settings
+  MessageSquareText,
 } from 'lucide-react';
 import HomePage from './pages/Home';
 import TrainPage from './pages/Train';
 import ConvertPage from './pages/Convert';
 import ModelsPage from './pages/Models';
+import TTSPage from './pages/TTS';
 
 const API = 'http://localhost:8765';
 
@@ -20,6 +20,7 @@ const navItems = [
   { path: '/', label: 'Home', icon: Home },
   { path: '/train', label: 'Train Voice', icon: Mic },
   { path: '/convert', label: 'Convert', icon: Music },
+  { path: '/tts', label: 'Text to Speech', icon: MessageSquareText },
   { path: '/models', label: 'Models', icon: Box },
 ];
 
@@ -120,6 +121,7 @@ export default function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/train" element={<TrainPage api={API} addToast={addToast} />} />
           <Route path="/convert" element={<ConvertPage api={API} addToast={addToast} />} />
+          <Route path="/tts" element={<TTSPage api={API} addToast={addToast} />} />
           <Route path="/models" element={<ModelsPage api={API} addToast={addToast} />} />
         </Routes>
       </main>

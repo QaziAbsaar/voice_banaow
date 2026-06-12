@@ -1,0 +1,18 @@
+Collecting gtts
+  Downloading gTTS-2.5.4-py3-none-any.whl.metadata (4.1 kB)
+Requirement already satisfied: requests<3,>=2.27 in ./venv/lib/python3.12/site-packages (from gtts) (2.34.2)
+Collecting click<8.2,>=7.1 (from gtts)
+  Downloading click-8.1.8-py3-none-any.whl.metadata (2.3 kB)
+Requirement already satisfied: charset_normalizer<4,>=2 in ./venv/lib/python3.12/site-packages (from requests<3,>=2.27->gtts) (3.4.7)
+Requirement already satisfied: idna<4,>=2.5 in ./venv/lib/python3.12/site-packages (from requests<3,>=2.27->gtts) (3.18)
+Requirement already satisfied: urllib3<3,>=1.26 in ./venv/lib/python3.12/site-packages (from requests<3,>=2.27->gtts) (2.7.0)
+Requirement already satisfied: certifi>=2023.5.7 in ./venv/lib/python3.12/site-packages (from requests<3,>=2.27->gtts) (2026.5.20)
+Downloading gTTS-2.5.4-py3-none-any.whl (29 kB)
+Downloading click-8.1.8-py3-none-any.whl (98 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 98.2/98.2 kB 416.9 kB/s eta 0:00:00
+Installing collected packages: click, gtts
+  Attempting uninstall: click
+    Found existing installation: click 8.4.1
+    Uninstalling click-8.4.1:
+      Successfully uninstalled click-8.4.1
+Successfully installed click-8.1.8 gtts-2.5.4

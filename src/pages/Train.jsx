@@ -2,7 +2,8 @@ import React, { useState, useRef, useCallback } from 'react';
 import axios from 'axios';
 import {
   Upload, X, FileAudio, CheckCircle, AlertTriangle,
-  ExternalLink, FolderOpen, Loader2, Music
+  ExternalLink, FolderOpen, Loader2, Music, Download,
+  Package, Cloud, Copy
 } from 'lucide-react';
 
 export default function TrainPage({ api, addToast }) {
@@ -10,6 +11,8 @@ export default function TrainPage({ api, addToast }) {
   const [preparing, setPreparing] = useState(false);
   const [prepResult, setPrepResult] = useState(null);
   const [currentFile, setCurrentFile] = useState('');
+  const [packaging, setPackaging] = useState(false);
+  const [colabPackage, setColabPackage] = useState(null);
   const dropRef = useRef(null);
 
   const handleDrop = useCallback((e) => {
@@ -51,6 +54,25 @@ export default function TrainPage({ api, addToast }) {
       setPreparing(false);
       setCurrentFile('');
     }
+  };
+
+  const handlePackage = async () => {
+    setPackaging(true);
+    try {
+      const res = await axios.post(`${api}/training/package`, {}, { timeout: 30000 });
+      setColabPackage(res.data);
+      addToast('Training package created!', 'success');
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message;
+      addToast(`Packaging failed: ${msg}`, 'error');
+    } finally {
+      setPackaging(false);
+    }
+  };
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text);
+    addToast('Copied to clipboard', 'info');
   };
 
   const formatDuration = (minutes) => {
@@ -198,49 +220,148 @@ export default function TrainPage({ api, addToast }) {
         </div>
       )}
 
-      {/* ── Section 2: Colab Training ── */}
-      <div className="bg-forge-card border border-forge-border rounded-xl p-6">
-        <h2 className="text-lg font-semibold mb-1">2. Train on Google Colab</h2>
-        <p className="text-sm text-forge-text-secondary mb-4">
-          Your vocals are ready. Now train the RVC model on Google Colab's free GPU.
-          This takes 30-60 minutes.
-        </p>
+      {/* ── Section 2: Package for Colab ── */}
+      {prepResult && (
+        <div className="bg-forge-card border border-forge-border rounded-xl p-6 mb-6">
+          <h2 className="text-lg font-semibold mb-1">2. Package for Colab</h2>
+          <p className="text-sm text-forge-text-secondary mb-4">
+            Package your vocal data into a zip file, upload to Google Drive, then train
+            with one click — no manual cell-by-cell execution.
+          </p>
 
-        <div className="bg-forge-input border border-forge-border rounded-lg p-4 mb-4">
-          <div className="flex items-start gap-3">
-            <AlertTriangle size={16} className="text-yellow-500 mt-0.5 shrink-0" />
-            <div className="text-sm text-forge-text-secondary">
-              <p className="mb-2">
-                After training completes on Colab, download the <code className="text-forge-accent bg-forge-bg px-1 rounded">.pth</code> and{' '}
-                <code className="text-forge-accent bg-forge-bg px-1 rounded">.index</code> files.
-              </p>
-              <p>
-                Drop them into your models folder and they'll appear in the app automatically.
-              </p>
+          {/* Package button */}
+          <button
+            onClick={handlePackage}
+            disabled={packaging}
+            className="w-full py-3 bg-forge-accent text-white rounded-lg font-medium
+                       hover:bg-forge-accent-hover disabled:opacity-50 disabled:cursor-not-allowed
+                       transition-all duration-200 flex items-center justify-center gap-2 mb-4"
+          >
+            {packaging ? (
+              <><Loader2 size={18} className="animate-spin" /> Packaging...</>
+            ) : (
+              <><Package size={18} /> Package for Colab</>
+            )}
+          </button>
+
+          {/* Package result */}
+          {colabPackage && (
+            <div className="space-y-4">
+              <div className="bg-forge-input border border-forge-border rounded-lg p-4">
+                <div className="grid grid-cols-3 gap-4 text-center">
+                  <div>
+                    <p className="text-xl font-bold text-forge-accent">{colabPackage.total_files}</p>
+                    <p className="text-xs text-forge-text-secondary">Vocal files</p>
+                  </div>
+                  <div>
+                    <p className="text-xl font-bold text-forge-accent">{colabPackage.total_size_mb.toFixed(1)}</p>
+                    <p className="text-xs text-forge-text-secondary">MB</p>
+                  </div>
+                  <div>
+                    <p className="text-xl font-bold text-forge-accent">{colabPackage.total_duration_minutes.toFixed(1)}</p>
+                    <p className="text-xs text-forge-text-secondary">Minutes</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Download zip */}
+              <div className="flex gap-2">
+                <a
+                  href={`${api}/training/package/download`}
+                  download
+                  className="flex-1 py-2.5 bg-forge-input border border-forge-border text-forge-text
+                             rounded-lg text-sm font-medium hover:bg-forge-border/50 transition-colors
+                             flex items-center justify-center gap-2"
+                >
+                  <Download size={16} />
+                  Download .zip
+                </a>
+              </div>
+
+              {/* Step-by-step instructions */}
+              <div className="bg-forge-border/20 border border-forge-border rounded-lg p-4">
+                <h3 className="font-medium text-sm mb-3 flex items-center gap-2">
+                  <Cloud size={16} className="text-forge-accent" />
+                  Upload to Google Drive
+                </h3>
+                <ol className="text-sm text-forge-text-secondary space-y-2 list-decimal list-inside">
+                  <li>
+                    Upload the zip to
+                    {' '}<a href="https://drive.google.com" target="_blank"
+                           className="text-forge-accent hover:underline" rel="noreferrer">Google Drive</a>
+                  </li>
+                  <li>
+                    Right-click the file → <span className="text-forge-text font-medium">Share</span> →
+                    <span className="text-forge-text font-medium"> General access → Anyone with the link</span>
+                  </li>
+                  <li>
+                    Copy the file ID from the link:
+                    <br />
+                    <code className="text-xs bg-forge-bg px-2 py-1 rounded mt-1 block break-all">
+                      drive.google.com/file/d/<span className="text-forge-accent">FILE_ID</span>/view
+                    </code>
+                  </li>
+                  <li>
+                    Click <span className="text-forge-text font-medium">Open Custom Notebook</span> below
+                  </li>
+                  <li>
+                    In Colab: paste FILE_ID + set model name →
+                    <span className="text-forge-text font-medium"> Runtime → Run all</span>
+                  </li>
+                </ol>
+              </div>
+
+              {/* Colab + models buttons */}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => window.open(colabPackage.colab_url, '_blank')}
+                  className="flex-1 py-3 bg-forge-accent text-white rounded-lg font-medium
+                             hover:bg-forge-accent-hover transition-colors flex items-center justify-center gap-2"
+                >
+                  <ExternalLink size={18} />
+                  Open Custom Notebook
+                </button>
+                <button
+                  onClick={() => window.electronAPI?.openModelsFolder()}
+                  className="flex-1 py-3 bg-forge-input border border-forge-border text-forge-text
+                             rounded-lg font-medium hover:bg-forge-border/50 transition-colors
+                             flex items-center justify-center gap-2"
+                >
+                  <FolderOpen size={18} />
+                  Models Folder
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
+      )}
 
+      {/* ── Section 3: Legacy / Manual Colab ── */}
+      <div className="bg-forge-card border border-forge-border rounded-xl p-6">
+        <h2 className="text-lg font-semibold mb-1">3. Manual Training (Alternative)</h2>
+        <p className="text-sm text-forge-text-secondary mb-4">
+          Prefer the standard RVC Colab notebook? Open it directly and run cells manually.
+        </p>
         <div className="flex gap-3">
           <button
             onClick={() => window.open(
               'https://colab.research.google.com/github/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/blob/main/Colab_train.ipynb',
               '_blank'
             )}
-            className="flex-1 py-3 bg-forge-accent text-white rounded-lg font-medium
-                       hover:bg-forge-accent-hover transition-colors flex items-center justify-center gap-2"
+            className="flex-1 py-3 bg-forge-input border border-forge-border text-forge-text
+                       rounded-lg text-sm font-medium hover:bg-forge-border/50 transition-colors
+                       flex items-center justify-center gap-2"
           >
-            <ExternalLink size={18} />
-            Open Training Notebook
+            <ExternalLink size={16} />
+            Standard RVC Notebook
           </button>
-
           <button
             onClick={() => window.electronAPI?.openModelsFolder()}
             className="flex-1 py-3 bg-forge-input border border-forge-border text-forge-text
-                       rounded-lg font-medium hover:bg-forge-border/50 transition-colors
+                       rounded-lg text-sm font-medium hover:bg-forge-border/50 transition-colors
                        flex items-center justify-center gap-2"
           >
-            <FolderOpen size={18} />
+            <FolderOpen size={16} />
             Open Models Folder
           </button>
         </div>

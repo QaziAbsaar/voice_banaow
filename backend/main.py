@@ -14,6 +14,8 @@ import uvicorn
 
 from demucs_engine import separate_vocals
 from rvc_engine import convert_voice, check_rvc_available, _set_models_dir
+from tts_engine import synthesize as tts_synthesize, detect_tts_backend
+from colab_package import package_for_colab
 from utils import (
     preprocess_audio, get_audio_duration, check_audio_quality,
     generate_output_filename, ensure_dir, convert_to_mp3
@@ -27,13 +29,16 @@ logging.basicConfig(
 logger = logging.getLogger("voiceforge")
 
 # ── Paths ──────────────────────────────────────────────────────────────────
-# Resolve project root (two levels up from backend/ if running from backend/)
 BASE_DIR = Path(__file__).resolve().parent.parent
-MODELS_DIR = ensure_dir(os.path.join(BASE_DIR, "models"))
-AUDIO_OUTPUT_DIR = ensure_dir(os.path.join(BASE_DIR, "audio_output"))
-TRAINING_DATA_DIR = ensure_dir(os.path.join(BASE_DIR, "training_data"))
-TRAINING_VOCALS_DIR = ensure_dir(os.path.join(TRAINING_DATA_DIR, "vocals"))
-TRAINING_RAW_DIR = ensure_dir(os.path.join(TRAINING_DATA_DIR, "raw"))
+MODELS_DIR = BASE_DIR / "models"
+AUDIO_OUTPUT_DIR = BASE_DIR / "audio_output"
+TRAINING_DATA_DIR = BASE_DIR / "training_data"
+TRAINING_VOCALS_DIR = TRAINING_DATA_DIR / "vocals"
+TRAINING_RAW_DIR = TRAINING_DATA_DIR / "raw"
+
+# Ensure dirs exist
+for d in [MODELS_DIR, AUDIO_OUTPUT_DIR, TRAINING_DATA_DIR, TRAINING_VOCALS_DIR, TRAINING_RAW_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
 
 _set_models_dir(str(MODELS_DIR))
 
@@ -51,15 +56,17 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    ensure_dir(MODELS_DIR)
-    ensure_dir(AUDIO_OUTPUT_DIR)
-    ensure_dir(TRAINING_VOCALS_DIR)
-    ensure_dir(TRAINING_RAW_DIR)
     model_count = len(list(MODELS_DIR.glob("*.pth")))
     rvc_ok = check_rvc_available()
+    try:
+        tts_backend = detect_tts_backend()
+        tts_status = f"✓ ({tts_backend})"
+    except RuntimeError:
+        tts_status = "✗"
     logger.info(
-        f"VoiceForge backend ready. Models found: {model_count}, "
-        f"rvc-python: {'✓' if rvc_ok else '✗'}"
+        f"VoiceForge backend ready. Models: {model_count}, "
+        f"RVC: {'✓' if rvc_ok else '✗'}, "
+        f"TTS: {tts_status}"
     )
 
 
@@ -136,8 +143,8 @@ async def singing_convert(
         raise HTTPException(status_code=400, detail="No audio file provided")
 
     # Validate model exists
-    pth_path = os.path.join(MODELS_DIR, f"{model_name}.pth")
-    if not os.path.exists(pth_path):
+    pth_path = MODELS_DIR / f"{model_name}.pth"
+    if not pth_path.exists():
         raise HTTPException(
             status_code=404,
             detail=f"Model '{model_name}' not found. Place {model_name}.pth in the models folder."
@@ -152,7 +159,7 @@ async def singing_convert(
         await f.write(content)
 
     output_filename = generate_output_filename("converted")
-    output_path = os.path.join(AUDIO_OUTPUT_DIR, output_filename)
+    output_path = AUDIO_OUTPUT_DIR / output_filename
 
     try:
         # Preprocess to 16kHz mono WAV
@@ -187,6 +194,89 @@ async def singing_convert(
         "duration": result["duration"],
         "model_used": model_name,
         "pitch_shift": pitch_shift
+    }
+
+
+@app.post("/tts/synthesize")
+async def text_to_speech(
+    text: str = Form(...),
+    model_name: str = Form(...),
+    tts_backend: str = Form("auto"),
+    language: str = Form("en"),
+    pitch_shift: int = Form(0),
+    index_rate: float = Form(0.75),
+    filter_radius: int = Form(3),
+    f0_method: str = Form("rmvpe"),
+    reference_audio: UploadFile | None = File(None),
+):
+    """
+    Synthesize text to speech, then convert to target voice using RVC.
+
+    Pipeline: Text → TTS (gTTS/XTTS) → RVC conversion → Output WAV
+    """
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    pth_path = MODELS_DIR / f"{model_name}.pth"
+    if not pth_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{model_name}' not found. Place {model_name}.pth in models folder."
+        )
+
+    temp_dir = ensure_dir(os.path.join(BASE_DIR, "temp"))
+    tts_output = os.path.join(temp_dir, f"tts_{uuid.uuid4().hex}.wav")
+
+    # Step 1: TTS synthesis
+    try:
+        speaker_wav = None
+        if reference_audio and reference_audio.filename:
+            ref_path = os.path.join(temp_dir, f"ref_{uuid.uuid4().hex}{Path(reference_audio.filename).suffix}")
+            async with aiofiles.open(ref_path, "wb") as f:
+                content = await reference_audio.read()
+                await f.write(content)
+            speaker_wav = ref_path
+
+        tts_synthesize(
+            text=text,
+            output_path=tts_output,
+            tts_engine=tts_backend,
+            speaker_wav=speaker_wav,
+            language=language,
+        )
+    except RuntimeError as e:
+        _cleanup_temp(temp_dir)
+        raise HTTPException(status_code=500, detail=f"TTS failed: {str(e)}")
+
+    # Step 2: RVC conversion
+    output_filename = generate_output_filename("tts_output")
+    output_path = AUDIO_OUTPUT_DIR / output_filename
+
+    try:
+        result = convert_voice(
+            source_audio_path=tts_output,
+            model_name=model_name,
+            output_path=str(output_path),
+            pitch_shift=pitch_shift,
+            index_rate=index_rate,
+            filter_radius=filter_radius,
+            f0_method=f0_method,
+        )
+    except HTTPException:
+        _cleanup_temp(temp_dir)
+        raise
+    except Exception as e:
+        _cleanup_temp(temp_dir)
+        raise HTTPException(status_code=500, detail=f"RVC conversion failed: {str(e)}")
+
+    _cleanup_temp(temp_dir)
+
+    return {
+        "output_path": str(output_path),
+        "duration": result["duration"],
+        "model_used": model_name,
+        "pitch_shift": pitch_shift,
+        "text": text,
     }
 
 
@@ -285,6 +375,51 @@ async def prepare_training(source_files: list[UploadFile] = File(...)):
         "ready_for_training": ready,
         "errors": errors
     }
+
+
+@app.post("/training/package")
+async def create_training_package():
+    """Zip prepared vocal data for Colab training."""
+    package = package_for_colab(
+        vocals_dir=str(TRAINING_VOCALS_DIR),
+        output_dir=str(BASE_DIR / "temp" / "colab_package"),
+    )
+
+    if package.get("error"):
+        raise HTTPException(status_code=400, detail=package["error"])
+
+    return {
+        "zip_name": package["zip_name"],
+        "total_size_mb": package["total_size_mb"],
+        "total_duration_minutes": package["total_duration_minutes"],
+        "total_files": package["total_files"],
+        "ready": True,
+        "colab_url": (
+            "https://colab.research.google.com/github/QaziAbsaar/"
+            "voice_banaow/blob/main/colab/voiceforge_train.ipynb"
+        ),
+    }
+
+
+@app.get("/training/package/download")
+async def download_training_package():
+    """Download the training data zip package."""
+    package = package_for_colab(
+        vocals_dir=str(TRAINING_VOCALS_DIR),
+        output_dir=str(BASE_DIR / "temp" / "colab_package"),
+    )
+
+    if package.get("error") or not package.get("zip_path"):
+        raise HTTPException(status_code=404, detail="No package available. Prepare vocals first.")
+
+    if not os.path.exists(package["zip_path"]):
+        raise HTTPException(status_code=404, detail="Package file not found.")
+
+    return FileResponse(
+        package["zip_path"],
+        filename=package["zip_name"],
+        media_type="application/zip",
+    )
 
 
 def _cleanup_temp(temp_dir: str):
