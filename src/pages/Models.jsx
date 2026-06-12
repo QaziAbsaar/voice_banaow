@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import {
-  Box, Trash2, RefreshCw, FolderOpen, AlertTriangle,
+  Box, Trash2, RefreshCw, AlertTriangle,
   CheckCircle, FileAudio, Loader2
 } from 'lucide-react';
 
@@ -41,16 +41,6 @@ export default function ModelsPage({ api, addToast }) {
     }
   };
 
-  const openModelsFolder = async () => {
-    try {
-      const res = await axios.get(`${api}/models/path`);
-      navigator.clipboard.writeText(res.data.path);
-      addToast('Models folder path copied to clipboard', 'info');
-    } catch {
-      addToast('Could not fetch models path', 'error');
-    }
-  };
-
   return (
     <div className="p-8 max-w-5xl mx-auto">
       {/* Header */}
@@ -68,13 +58,6 @@ export default function ModelsPage({ api, addToast }) {
                              flex items-center gap-2">
             <RefreshCw size={16} />
             Refresh
-          </button>
-          <button onClick={openModelsFolder}
-                  className="px-4 py-2 bg-forge-input border border-forge-border text-forge-text
-                             rounded-lg text-sm font-medium hover:bg-forge-border/50 transition-colors
-                             flex items-center gap-2">
-            <FolderOpen size={16} />
-            Open Folder
           </button>
         </div>
       </div>
@@ -105,11 +88,14 @@ export default function ModelsPage({ api, addToast }) {
             </div>
           </div>
 
-          <button onClick={openModelsFolder}
-                  className="px-6 py-3 bg-forge-accent text-white rounded-lg font-medium
-                             hover:bg-forge-accent-hover transition-colors">
-            Open Models Folder
-          </button>
+          <div className="bg-forge-bg border border-forge-border rounded-lg p-3">
+            <p className="text-xs text-forge-text-secondary">
+              Drop <span className="text-forge-accent font-mono">.pth</span> and
+              <span className="text-forge-accent font-mono"> .index</span> files into the
+              <span className="text-forge-text font-mono text-[10px]"> /models</span> folder,
+              then click <span className="text-forge-text">Refresh</span>.
+            </p>
+          </div>
         </div>
       ) : (
         /* Model grid */

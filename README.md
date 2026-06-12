@@ -1,6 +1,6 @@
 # VoiceForge
 
-> Clone any singer's voice with AI — RVC v2 based voice conversion desktop app.
+> Clone any singer's voice with AI — RVC v2 based voice conversion web app.
 
 Train on MP3s of any singer, then convert any vocal recording to sound like them. Everything runs locally with optional Google Colab GPU training.
 
@@ -16,7 +16,6 @@ Train on MP3s of any singer, then convert any vocal recording to sound like them
 ### Setup
 
 ```bash
-# Clone & enter
 git clone <repo> voiceforge
 cd voiceforge
 
@@ -31,13 +30,25 @@ npm install
 
 Or run `./setup.sh` (Mac/Linux) or `setup.bat` (Windows).
 
-### Run
+### Run (two terminals)
 
 ```bash
+# Terminal 1 — Backend (FastAPI on port 8765)
+python backend/main.py
+# Or: ./venv/bin/python backend/main.py
+
+# Terminal 2 — Frontend (Vite on port 5173)
 npm run dev
 ```
 
-This starts both the Vite dev server and Electron app. The Python backend spawns automatically on port 8765.
+Open **http://localhost:5173** in your browser.
+
+### Or run in production
+
+```bash
+npm run build       # Builds frontend to dist/
+python backend/main.py  # Backend serves both API + frontend at http://localhost:8765
+```
 
 ## How to Train a Voice Model
 

@@ -4,7 +4,6 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "dev:all": "concurrently -k \"npm run dev\" \"npm run backend\"",
     "backend": "cd backend && ../venv/bin/python main.py",
     "build": "vite build",
     "preview": "vite preview"
@@ -19,7 +18,6 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.19",
-    "concurrently": "^8.2.2",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
     "vite": "^5.2.12"

@@ -335,6 +335,38 @@ async def serve_audio(filename: str):
     return FileResponse(str(file_path))
 
 
+@app.post("/audio/convert-to-mp3")
+async def convert_audio_to_mp3(data: dict):
+    """Convert a WAV file in audio_output to MP3 for download."""
+    filename = data.get("filename", "")
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename required")
+
+    src = AUDIO_OUTPUT_DIR / filename
+    if not src.exists():
+        # Try with .wav extension
+        src = AUDIO_OUTPUT_DIR / f"{filename}.wav" if "." not in filename else src
+        if not src.exists():
+            raise HTTPException(status_code=404, detail="Audio file not found")
+
+    stem = src.stem
+    mp3_path = AUDIO_OUTPUT_DIR / f"{stem}.mp3"
+
+    try:
+        from pydub import AudioSegment
+        audio = AudioSegment.from_file(str(src))
+        audio.export(str(mp3_path), format="mp3", bitrate="192k")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"MP3 conversion failed: {str(e)}")
+
+    return FileResponse(
+        str(mp3_path),
+        media_type="audio/mpeg",
+        filename=f"{stem}.mp3",
+        headers={"Content-Disposition": f'attachment; filename="{stem}.mp3"'},
+    )
+
+
 @app.post("/training/prepare")
 async def prepare_training(
     source_files: list[UploadFile] = File(...),

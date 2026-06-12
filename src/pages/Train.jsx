@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback } from 'react';
 import axios from 'axios';
 import {
   Upload, X, FileAudio, CheckCircle, AlertTriangle,
-  ExternalLink, FolderOpen, Loader2, Music, Download,
+  ExternalLink, Loader2, Music, Download,
   Package, Cloud, Copy
 } from 'lucide-react';
 
@@ -75,16 +75,6 @@ export default function TrainPage({ api, addToast }) {
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
     addToast('Copied to clipboard', 'info');
-  };
-
-  const openModelsFolder = async () => {
-    try {
-      const res = await axios.get(`${api}/models/path`);
-      copyToClipboard(res.data.path);
-      addToast(`Models folder path copied: ${res.data.path}`, 'info');
-    } catch {
-      addToast('Could not fetch models path', 'error');
-    }
   };
 
   const formatDuration = (minutes) => {
@@ -367,15 +357,15 @@ export default function TrainPage({ api, addToast }) {
                   <ExternalLink size={18} />
                   Open Custom Notebook
                 </button>
-                <button
-                  onClick={openModelsFolder}
-                  className="flex-1 py-3 bg-forge-input border border-forge-border text-forge-text
-                             rounded-lg font-medium hover:bg-forge-border/50 transition-colors
-                             flex items-center justify-center gap-2"
-                >
-                  <FolderOpen size={18} />
-                  Models Folder
-                </button>
+              </div>
+
+              <div className="bg-forge-input border border-forge-border rounded-lg p-3 mt-3">
+                <p className="text-xs text-forge-text-secondary">
+                  After training on Colab, download your <span className="text-forge-accent font-mono">.pth</span> and
+                  <span className="text-forge-accent font-mono"> .index</span> files.
+                  Drop them into the <span className="text-forge-text font-mono text-[10px]">/models</span> folder
+                  inside your VoiceForge directory. Then go to the Models page and click Refresh.
+                </p>
               </div>
             </div>
           )}
@@ -401,16 +391,11 @@ export default function TrainPage({ api, addToast }) {
             <ExternalLink size={16} />
             Standard RVC Notebook
           </button>
-          <button
-            onClick={openModelsFolder}
-            className="flex-1 py-3 bg-forge-input border border-forge-border text-forge-text
-                       rounded-lg text-sm font-medium hover:bg-forge-border/50 transition-colors
-                       flex items-center justify-center gap-2"
-          >
-            <FolderOpen size={16} />
-            Open Models Folder
-          </button>
         </div>
+        <p className="text-xs text-forge-text-secondary mt-3 text-center">
+          After training, download .pth + .index from Google Drive and drop into
+          the <span className="text-forge-text font-mono text-[10px]">/models</span> folder.
+        </p>
       </div>
     </div>
   );

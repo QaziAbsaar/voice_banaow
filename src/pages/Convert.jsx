@@ -123,12 +123,30 @@ export default function ConvertPage({ api, addToast }) {
     }
   };
 
-  const handleDownload = () => {
-    if (!result?.audioUrl) return;
+  const handleDownloadWav = () => {
+    if (!result?.filename) return;
     const a = document.createElement('a');
-    a.href = result.audioUrl;
-    a.download = `converted_${result.filename || 'output.wav'}`;
+    a.href = `${api}/audio/${result.filename}`;
+    a.download = result.filename;
     a.click();
+  };
+
+  const handleDownloadMp3 = async () => {
+    if (!result?.filename) return;
+    try {
+      const res = await axios.post(`${api}/audio/convert-to-mp3`,
+        { filename: result.filename },
+        { responseType: 'blob', timeout: 30000 }
+      );
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename.replace(/\.wav$/, '') + '.mp3';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      addToast('MP3 conversion failed', 'error');
+    }
   };
 
   const handleReset = () => {
@@ -385,18 +403,24 @@ export default function ConvertPage({ api, addToast }) {
               </div>
 
               <div className="flex gap-3">
-                <button onClick={handleDownload}
+                <button onClick={handleDownloadWav}
                         className="flex-1 py-3 bg-forge-accent text-white rounded-lg font-medium
                                    hover:bg-forge-accent-hover transition-colors flex items-center justify-center gap-2">
                   <Download size={18} />
-                  Download
+                  Download WAV
+                </button>
+                <button onClick={handleDownloadMp3}
+                        className="flex-1 py-3 bg-forge-input border border-forge-border text-forge-text
+                                   rounded-lg font-medium hover:bg-forge-border/50 transition-colors flex items-center justify-center gap-2">
+                  <Download size={18} />
+                  Download MP3
                 </button>
                 <button onClick={handleReset}
                         className="flex-1 py-3 bg-forge-input border border-forge-border text-forge-text
                                    rounded-lg font-medium hover:bg-forge-border/50 transition-colors
                                    flex items-center justify-center gap-2">
                   <RotateCcw size={18} />
-                  Convert Again
+                  New
                 </button>
               </div>
             </div>
