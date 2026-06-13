@@ -507,10 +507,10 @@ async def auth_google_url():
 
 
 @app.get("/auth/google/callback")
-async def auth_google_callback(code: str):
+async def auth_google_callback(code: str, state: str = ""):
     """Handle OAuth callback — exchange code for token."""
     try:
-        handle_callback(code, REDIRECT_URI)
+        handle_callback(code, state, REDIRECT_URI)
         # Redirect user back to frontend Train page
         return RedirectResponse(url="http://localhost:5173/train")
     except Exception as e:
