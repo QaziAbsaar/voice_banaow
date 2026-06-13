@@ -46,7 +46,7 @@ def separate_vocals(input_path: str, output_dir: str) -> dict:
             check=True,
             capture_output=True,
             text=True,
-            timeout=600
+            timeout=1800
         )
         logger.info(f"Demucs stdout: {result.stdout[-500:] if result.stdout else ''}")
     except subprocess.CalledProcessError as e:
@@ -56,7 +56,7 @@ def separate_vocals(input_path: str, output_dir: str) -> dict:
             f"Demucs separation failed. Error: {stderr}"
         )
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Demucs timed out after 10 minutes.")
+        raise RuntimeError("Demucs timed out after 30 minutes. Try shorter audio files or 'Clean vocals only' mode.")
     except FileNotFoundError:
         raise RuntimeError(
             "Demucs not found. Install it with: pip install demucs"

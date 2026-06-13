@@ -90,16 +90,16 @@ export default function TrainPage({ api, addToast }) {
             return;
           }
           if (status === 'error') {
-            addToast(`Training failed: ${error}`, 'error');
-            setStep('upload');
+            setProgressMsg(error || 'Unknown error');
+            setStep('error');
             setPreparing(false);
             return;
           }
           // Still processing — poll again
           setTimeout(poll, 2000);
         } catch (err) {
-          addToast(`Status check failed: ${err.message}`, 'error');
-          setStep('upload');
+          setProgressMsg(`Status check failed: ${err.message}`);
+          setStep('error');
           setPreparing(false);
         }
       };
@@ -502,6 +502,47 @@ export default function TrainPage({ api, addToast }) {
                          hover:bg-forge-border/50 transition-colors"
             >
               Train Another
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP: Error — show persistent error instead of silent redirect ── */}
+      {step === 'error' && (
+        <div className="bg-forge-card border border-forge-border rounded-xl p-8 text-center">
+          <div className="w-16 h-16 bg-forge-error/10 rounded-full flex items-center justify-center mx-auto mb-4">
+            <AlertTriangle size={32} className="text-forge-error" />
+          </div>
+          <h2 className="text-xl font-semibold mb-2 text-forge-error">Training Failed</h2>
+          <div className="bg-forge-error/5 border border-forge-error/30 rounded-lg p-4 mb-4 max-w-md mx-auto text-left">
+            <p className="text-sm text-forge-text-secondary whitespace-pre-wrap font-mono text-xs">
+              {progressMsg}
+            </p>
+          </div>
+          <p className="text-sm text-forge-text-secondary mb-6">
+            Common causes:
+          </p>
+          <ul className="text-sm text-forge-text-secondary text-left max-w-sm mx-auto mb-6 space-y-2">
+            <li className="flex items-start gap-2">
+              <span className="text-forge-error shrink-0 font-bold">•</span>
+              <span><strong>CPU too slow</strong> — Demucs vocal separation times out on CPU for long files. Try shorter audio (2-3 min) or use <strong>Clean vocals only</strong> mode.</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-forge-error shrink-0 font-bold">•</span>
+              <span><strong>Unsupported format</strong> — Use MP3 or WAV files.</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-forge-error shrink-0 font-bold">•</span>
+              <span><strong>Timeout</strong> — Total processing time exceeded 30 min. Use shorter files.</span>
+            </li>
+          </ul>
+          <div className="flex gap-3 justify-center">
+            <button
+              onClick={handleNewTraining}
+              className="px-6 py-3 bg-forge-accent text-white rounded-lg font-medium
+                         hover:bg-forge-accent-hover transition-colors"
+            >
+              Try Again
             </button>
           </div>
         </div>
