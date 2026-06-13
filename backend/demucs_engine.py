@@ -32,8 +32,9 @@ def separate_vocals(input_path: str, output_dir: str) -> dict:
     logger.info(f"Starting Demucs separation for: {input_path}")
 
     try:
+        wrapper_path = os.path.join(os.path.dirname(__file__), "demucs_wrapper.py")
         cmd = [
-            sys.executable, "-m", "demucs",
+            sys.executable, wrapper_path,
             "--two-stems=vocals",
             "-n", "htdemucs",
             "-o", output_dir,
@@ -45,8 +46,7 @@ def separate_vocals(input_path: str, output_dir: str) -> dict:
             check=True,
             capture_output=True,
             text=True,
-            timeout=600,
-            env={**os.environ, "TORCHAUDIO_USE_BACKEND": "soundfile"}
+            timeout=600
         )
         logger.info(f"Demucs stdout: {result.stdout[-500:] if result.stdout else ''}")
     except subprocess.CalledProcessError as e:
