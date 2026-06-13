@@ -2,11 +2,14 @@
 Google Drive integration — OAuth, upload, scan, download.
 
 Token stored in token.pickle (per-instance). Refresh handled automatically.
+Flow state persisted to .flow_cache/ to bridge PKCE code_verifier across redirect.
 """
 import io
 import os
+import json
 import pickle
 import logging
+import secrets
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -17,7 +20,9 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 logger = logging.getLogger("voiceforge.drive")
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
-TOKEN_FILE = Path(__file__).parent / "token.pickle"
+PKG_DIR = Path(__file__).parent
+TOKEN_FILE = PKG_DIR / "token.pickle"
+FLOW_CACHE_DIR = PKG_DIR / ".flow_cache"
 VOICEFORGE_ROOT = "VoiceForge"
 
 
@@ -36,25 +41,54 @@ def _make_client_config(redirect_uri: str) -> dict:
     }
 
 
-def _make_flow(redirect_uri: str) -> Flow:
-    return Flow.from_client_config(
+def get_auth_url(redirect_uri: str) -> str:
+    """
+    Return Google OAuth consent-page URL.
+
+    Persists PKCE code_verifier + state to JSON so callback can rehydrate it.
+    """
+    flow = Flow.from_client_config(
         _make_client_config(redirect_uri), scopes=SCOPES, redirect_uri=redirect_uri
     )
+    state = secrets.token_urlsafe(16)
+    url, _ = flow.authorization_url(
+        prompt="consent",
+        access_type="offline",
+        state=state,
+        include_granted_scopes="true",
+    )
 
+    # Save code_verifier + state (Flow can't be pickled — has lambdas)
+    FLOW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    # Single-user: only keep latest
+    for old in FLOW_CACHE_DIR.glob("state_*.json"):
+        old.unlink()
+    with open(FLOW_CACHE_DIR / f"state_{state}.json", "w") as f:
+        json.dump({"state": state, "code_verifier": flow.code_verifier}, f)
 
-def get_auth_url(redirect_uri: str) -> str:
-    """Return Google OAuth consent-page URL."""
-    flow = _make_flow(redirect_uri)
-    url, _ = flow.authorization_url(prompt="consent", access_type="offline")
     return url
 
 
-def handle_callback(code: str, redirect_uri: str) -> bool:
+def handle_callback(code: str, state: str, redirect_uri: str) -> bool:
     """Exchange auth code for tokens and persist them."""
-    flow = _make_flow(redirect_uri)
+    state_file = FLOW_CACHE_DIR / f"state_{state}.json"
+    if not state_file.exists():
+        raise RuntimeError("OAuth flow expired or not found. Please try connecting again.")
+
+    with open(state_file) as f:
+        saved = json.load(f)
+
+    flow = Flow.from_client_config(
+        _make_client_config(redirect_uri), scopes=SCOPES, redirect_uri=redirect_uri
+    )
+    # Restore PKCE verifier so Google accepts our token exchange
+    flow.code_verifier = saved["code_verifier"]
     flow.fetch_token(code=code)
+
     with open(TOKEN_FILE, "wb") as f:
         pickle.dump(flow.credentials, f)
+
+    state_file.unlink(missing_ok=True)
     logger.info("Drive OAuth token saved")
     return True
 
@@ -167,8 +201,8 @@ def scan_model_folder(model_name: str) -> dict:
     """
     Scan Drive VoiceForge/{model_name}/ for .pth and .index files.
 
-    Returns { "pth": {id, name, size, modifiedTime} | None,
-              "index": {id, name, size, modifiedTime} | None }
+    Returns {"pth": {id, name, size, modifiedTime} | None,
+             "index": {id, name, size, modifiedTime} | None}
     """
     svc = _require_service()
     root_id = get_voiceforge_root()
