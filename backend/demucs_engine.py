@@ -45,7 +45,8 @@ def separate_vocals(input_path: str, output_dir: str) -> dict:
             check=True,
             capture_output=True,
             text=True,
-            timeout=600
+            timeout=600,
+            env={**os.environ, "TORCHAUDIO_USE_BACKEND": "soundfile"}
         )
         logger.info(f"Demucs stdout: {result.stdout[-500:] if result.stdout else ''}")
     except subprocess.CalledProcessError as e:
