@@ -46,7 +46,8 @@ export default function TrainPage({ api, addToast }) {
   };
 
   const handleStartTraining = async () => {
-    if (files.length === 0 || !modelName.trim()) return;
+    if (files.length === 0) return;
+    const finalName = modelName.trim() || `model_${Date.now().toString(36)}`;
 
     // Step 1 — Check Drive auth
     if (!driveStatus) {
@@ -56,23 +57,54 @@ export default function TrainPage({ api, addToast }) {
 
     setStep('training');
     setPreparing(true);
-    setProgressMsg('Uploading and preparing vocals...');
+    setProgressMsg('Uploading files...');
     setTrainResult(null);
     setImportResult(null);
 
     const formData = new FormData();
     files.forEach(f => formData.append('source_files', f));
-    formData.append('model_name', modelName.trim());
+    formData.append('model_name', finalName);
     formData.append('has_background_music', hasBackgroundMusic);
 
     try {
+      // Kick off background training — get task_id immediately (short timeout)
       const res = await axios.post(`${api}/training/start`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 600000,
+        timeout: 30000, // just needs to upload files, not whole pipeline
       });
-      setTrainResult(res.data);
-      setStep('colab');
-      addToast('Data uploaded to Drive! Open Colab to train.', 'success');
+      const taskId = res.data.task_id;
+
+      // Poll for completion
+      const poll = async () => {
+        try {
+          const pollRes = await axios.get(`${api}/training/start/status/${taskId}`, { timeout: 5000 });
+          const { status, progress, result, error } = pollRes.data;
+
+          if (progress) setProgressMsg(progress);
+
+          if (status === 'done') {
+            setTrainResult(result);
+            setStep('colab');
+            addToast('Data uploaded to Drive! Open Colab to train.', 'success');
+            setPreparing(false);
+            return;
+          }
+          if (status === 'error') {
+            addToast(`Training failed: ${error}`, 'error');
+            setStep('upload');
+            setPreparing(false);
+            return;
+          }
+          // Still processing — poll again
+          setTimeout(poll, 2000);
+        } catch (err) {
+          addToast(`Status check failed: ${err.message}`, 'error');
+          setStep('upload');
+          setPreparing(false);
+        }
+      };
+      setTimeout(poll, 2000);
+
     } catch (err) {
       const msg = err.response?.data?.detail || err.message;
       addToast(`Training setup failed: ${msg}`, 'error');
@@ -81,7 +113,6 @@ export default function TrainPage({ api, addToast }) {
       } else {
         setStep('upload');
       }
-    } finally {
       setPreparing(false);
     }
   };
@@ -265,7 +296,7 @@ export default function TrainPage({ api, addToast }) {
             {/* Start Training button */}
             <button
               onClick={handleStartTraining}
-              disabled={files.length === 0 || !modelName.trim()}
+              disabled={files.length === 0}
               className="w-full py-3 bg-forge-accent text-white rounded-lg font-medium
                          hover:bg-forge-accent-hover disabled:opacity-50 disabled:cursor-not-allowed
                          transition-all duration-200 flex items-center justify-center gap-2 text-base"
@@ -355,7 +386,7 @@ export default function TrainPage({ api, addToast }) {
             </div>
           </div>
           <p className="text-xs text-forge-text-secondary mt-4">
-            Extracting vocals, packaging, uploading to Drive...
+            This may take several minutes — models directory is not needed
           </p>
         </div>
       )}
@@ -390,7 +421,7 @@ export default function TrainPage({ api, addToast }) {
             <div className="bg-forge-accent/5 border border-forge-accent/20 rounded-lg p-5 mb-4">
               <h3 className="font-semibold mb-2 text-sm">Step 1: Start Colab Training</h3>
               <p className="text-sm text-forge-text-secondary mb-4">
-                Click the button below to open Google Colab. The model name <strong>"{trainResult.model_name}"</strong> is pre-filled.
+                Click the button below to open Google Colab. It auto-detects your model <strong>"{trainResult.model_name}"</strong> from Drive.
                 Just click <strong>Runtime → Run all</strong> (takes 30-60 minutes on a T4 GPU).
               </p>
               <button

@@ -13,3 +13,4 @@ training_data/raw/*
 training_data/vocals/*
 *.wav
 .DS_Store
+token.pickle

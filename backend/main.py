@@ -533,6 +533,91 @@ async def auth_google_revoke():
 
 # ── One-click Training Flow ──────────────────────────────────────────────
 
+import threading
+
+# In-memory task store: {task_id: {"status": str, "progress": str, "result": dict | None, "error": str | None}}
+_training_tasks: dict[str, dict] = {}
+
+
+def _run_training_task(task_id: str, file_paths: list[str], model_name: str, has_background_music: bool):
+    """
+    Execute training pipeline in a background thread so the server stays responsive.
+
+    Steps: prepare vocals → package zip → upload to Drive → build Colab URL.
+    """
+    task = _training_tasks[task_id]
+    clean_name = model_name.strip().replace(" ", "_").replace("/", "_")
+    prepared_files = []
+    total_duration = 0.0
+    errors = []
+
+    try:
+        # Step 1 — Prepare vocals
+        task["progress"] = "Extracting vocals..."
+        for raw_path in file_paths:
+            file_id = Path(raw_path).stem
+            vocals_dest_dir = ensure_dir(os.path.join(TRAINING_VOCALS_DIR, file_id))
+            final_vocals = os.path.join(vocals_dest_dir, "vocals.wav")
+
+            if has_background_music:
+                logger.info("Thread %s: running Demucs on %s", task_id, raw_path)
+                result = separate_vocals(raw_path, str(TRAINING_DATA_DIR))
+                if os.path.exists(result["vocals_path"]):
+                    shutil.move(result["vocals_path"], final_vocals)
+                    prepared_files.append(final_vocals)
+                    total_duration += result["duration"]
+            else:
+                shutil.copy2(raw_path, final_vocals)
+                try:
+                    dur = librosa.get_duration(path=final_vocals)
+                except Exception:
+                    dur = 0
+                prepared_files.append(final_vocals)
+                total_duration += dur
+
+        if not prepared_files:
+            raise RuntimeError("No vocals could be prepared from uploaded files")
+
+        # Step 2 — Package zip
+        task["progress"] = "Packaging training data..."
+        temp_dir = ensure_dir(os.path.join(BASE_DIR, "temp", f"train_{task_id}"))
+        pkg = package_for_colab(vocals_dir=str(TRAINING_VOCALS_DIR), output_dir=temp_dir)
+
+        if pkg.get("error"):
+            raise RuntimeError(pkg["error"])
+
+        # Step 3 — Upload to Google Drive
+        task["progress"] = "Uploading to Google Drive..."
+        model_folder_id = get_model_folder(clean_name)
+        drive_file = upload_file(pkg["zip_path"], model_folder_id)
+
+        # Step 4 — Build Colab URL
+        colab_url = (
+            "https://colab.research.google.com/github/QaziAbsaar/"
+            "voice_banaow/blob/main/colab/voiceforge_train.ipynb"
+        )
+
+        # Sort errors: list of strings that aren't per-file errors
+        train_errors = [e for e in errors if not any(f in str(e) for f in file_paths)] if errors else []
+
+        task["status"] = "done"
+        task["result"] = {
+            "model_name": clean_name,
+            "prepared_files": len(prepared_files),
+            "total_duration_minutes": round(total_duration / 60, 2),
+            "total_size_mb": pkg["total_size_mb"],
+            "zip_name": pkg["zip_name"],
+            "drive_file_id": drive_file["id"],
+            "colab_url": colab_url,
+            "errors": train_errors,
+        }
+        logger.info("Task %s complete: %s", task_id, clean_name)
+
+    except Exception as e:
+        logger.error("Task %s failed: %s", task_id, e)
+        task["status"] = "error"
+        task["error"] = str(e)
+
 
 @app.post("/training/start")
 async def start_training(
@@ -541,99 +626,59 @@ async def start_training(
     has_background_music: bool = Form(True),
 ):
     """
-    One-click training pipeline:
-      1. Prepare vocals (Demucs if needed)
-      2. Package zip
-      3. Upload zip to Google Drive VoiceForge/{model_name}/
-      4. Return pre-filled Colab URL
+    Start training in background — returns immediately with task_id.
+    Poll GET /training/start/status/{task_id} for progress.
     """
     if not source_files:
         raise HTTPException(status_code=400, detail="No files provided")
     if not model_name.strip():
         raise HTTPException(status_code=400, detail="model_name is required")
-
     if not is_authenticated():
-        raise HTTPException(
-            status_code=401,
-            detail="Google Drive not authenticated. Call POST /training/start after auth.",
-        )
+        raise HTTPException(status_code=401, detail="Google Drive not authenticated.")
 
     clean_name = model_name.strip().replace(" ", "_").replace("/", "_")
-    file_id = uuid.uuid4().hex
+    task_id = uuid.uuid4().hex
 
-    # Step 1 — Prepare vocals
-    prepared_files = []
-    total_duration = 0.0
-    errors = []
-
+    # Save uploaded files to disk (must be done in async context)
+    saved_paths = []
     for source in source_files:
         if not source.filename:
             continue
         ext = Path(source.filename).suffix.lower()
         if ext not in (".mp3", ".wav", ".m4a", ".flac", ".ogg"):
-            errors.append(f"{source.filename}: unsupported format")
             continue
+        raw_path = os.path.join(TRAINING_RAW_DIR, f"{task_id}_{uuid.uuid4().hex}{ext}")
+        content = await source.read()
+        with open(raw_path, "wb") as f:
+            f.write(content)
+        saved_paths.append(raw_path)
 
-        raw_path = os.path.join(TRAINING_RAW_DIR, f"{file_id}{ext}")
-        async with aiofiles.open(raw_path, "wb") as f:
-            content = await source.read()
-            await f.write(content)
+    if not saved_paths:
+        raise HTTPException(status_code=400, detail="No valid audio files provided")
 
-        vocals_dest_dir = ensure_dir(os.path.join(TRAINING_VOCALS_DIR, file_id))
-        final_vocals = os.path.join(vocals_dest_dir, "vocals.wav")
-
-        if has_background_music:
-            try:
-                result = separate_vocals(raw_path, str(TRAINING_DATA_DIR))
-                if os.path.exists(result["vocals_path"]):
-                    shutil.move(result["vocals_path"], final_vocals)
-                    prepared_files.append(final_vocals)
-                    total_duration += result["duration"]
-            except RuntimeError as e:
-                errors.append(f"{source.filename}: {str(e)}")
-                continue
-        else:
-            shutil.copy2(raw_path, final_vocals)
-            try:
-                dur = librosa.get_duration(path=final_vocals)
-            except Exception:
-                dur = 0
-            prepared_files.append(final_vocals)
-            total_duration += dur
-
-    if not prepared_files:
-        raise HTTPException(status_code=400, detail="No vocals could be prepared")
-
-    # Step 2 — Package zip
-    temp_dir = ensure_dir(os.path.join(BASE_DIR, "temp", f"train_{file_id}"))
-    pkg = package_for_colab(vocals_dir=str(TRAINING_VOCALS_DIR), output_dir=temp_dir)
-
-    if pkg.get("error"):
-        raise HTTPException(status_code=400, detail=pkg["error"])
-
-    # Step 3 — Upload to Google Drive
-    try:
-        model_folder_id = get_model_folder(clean_name)
-        drive_file = upload_file(pkg["zip_path"], model_folder_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Drive upload failed: {str(e)}")
-
-    # Step 4 — Build Colab URL with model name pre-filled
-    colab_url = (
-        "https://colab.research.google.com/github/QaziAbsaar/"
-        "voice_banaow/blob/main/colab/voiceforge_train.ipynb"
-        f"#model_name={clean_name}"
+    # Register task and launch background thread
+    _training_tasks[task_id] = {"status": "processing", "progress": "Queued...", "result": None, "error": None}
+    thread = threading.Thread(
+        target=_run_training_task,
+        args=(task_id, saved_paths, clean_name, has_background_music),
+        daemon=True,
     )
+    thread.start()
 
+    return {"task_id": task_id, "model_name": clean_name, "files_saved": len(saved_paths)}
+
+
+@app.get("/training/start/status/{task_id}")
+async def training_status(task_id: str):
+    """Poll training task progress."""
+    task = _training_tasks.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
     return {
-        "model_name": clean_name,
-        "prepared_files": len(prepared_files),
-        "total_duration_minutes": round(total_duration / 60, 2),
-        "total_size_mb": pkg["total_size_mb"],
-        "zip_name": pkg["zip_name"],
-        "drive_file_id": drive_file["id"],
-        "colab_url": colab_url,
-        "errors": errors,
+        "status": task["status"],
+        "progress": task.get("progress", ""),
+        "result": task.get("result"),
+        "error": task.get("error"),
     }
 
 
