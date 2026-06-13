@@ -13,4 +13,11 @@ python-dotenv>=1.0.1
 google-auth-oauthlib>=1.2.0
 google-auth-httplib2>=0.2.0
 google-api-python-client>=2.130.0
+
+# RVC inference (required for Convert + TTS pages)
+# NOTE: rvc-python may need numpy<=1.23.5 — if conflict arises, run:
+#   pip install "numpy<=1.23.5" && pip install rvc-python
+rvc-python>=0.1.5
+
 # TTS (XTTS) optional — pip install TTS for voice cloning quality
+# praat-parselmouth — needed for pitch extraction during training (Colab only, not backend)
