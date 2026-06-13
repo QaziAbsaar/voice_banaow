@@ -14,8 +14,7 @@ Voice cloning web app. Train on singer MP3s using RVC v2, convert any vocal to s
 
 ```bash
 # Terminal 1 — Backend (port 8765)
-python backend/main.py
-# Or: ./venv/bin/python backend/main.py
+cd backend && python main.py
 
 # Terminal 2 — Frontend (port 5173)
 npm run dev
@@ -34,6 +33,8 @@ Browser (React SPA)  ←→  FastAPI (port 8765)  ←→  Python engines
                        /audio_output/           rvc_engine.py
                        /training_data/          tts_engine.py
                                                 colab_package.py
+                                                google_drive.py
+                                                demucs_wrapper.py
                                                 utils.py
 ```
 
@@ -44,6 +45,8 @@ Browser (React SPA)  ←→  FastAPI (port 8765)  ←→  Python engines
 - **CORS enabled** — `allow_origins=["*"]` on FastAPI.
 - **Production mode** — `npm run build` outputs to `dist/`, FastAPI serves it as static files at `http://localhost:8765`.
 - **All audio processing is server-side** — Frontend only handles uploads, playback, and downloads via browser APIs.
+- **Training is async** — Runs in background thread, API stays responsive. Health check never blocks.
+- **Google Drive bridge** — Training data uploaded to Drive, Colab trains from Drive, model imported back from Drive.
 
 ---
 
@@ -52,7 +55,7 @@ Browser (React SPA)  ←→  FastAPI (port 8765)  ←→  Python engines
 | Path | Component | Requires Backend | Description |
 |---|---|---|---|
 | `/` | Home.jsx | No | Landing page, hero, how-it-works, features, status footer |
-| `/train` | Train.jsx | Yes | Upload MP3s, Demucs extraction, Colab packaging |
+| `/train` | Train.jsx | Yes | Upload MP3s → One-click training with Drive + Colab |
 | `/convert` | Convert.jsx | Yes | Voice conversion with parameter controls |
 | `/tts` | TTS.jsx | Yes | Text-to-speech → RVC pipeline |
 | `/models` | Models.jsx | No | Model card grid, delete, refresh |
@@ -124,6 +127,22 @@ POST /tts/synthesize
 → { "output_path": str, "duration": float, "model_used": str, "text": str }
 ```
 
+### Google Drive Auth
+
+```
+GET /auth/google/url
+→ { "url": str }   # OAuth consent URL
+
+GET /auth/google/callback?code=xxx&state=yyy
+→ Redirect to http://localhost:5173/train (after auth)
+
+GET /auth/google/status
+→ { "authenticated": bool }
+
+POST /auth/google/revoke
+→ { "revoked": bool }
+```
+
 ### Training Data Preparation
 
 ```
@@ -140,6 +159,25 @@ GET /training/package/download
 → Zip file download
 ```
 
+### One-Click Training (Background)
+
+```
+POST /training/start
+  FormData: source_files[], model_name, has_background_music
+→ { "task_id": str, "model_name": str, "files_saved": int }
+
+GET /training/start/status/{task_id}
+→ { "status": "processing"|"done"|"error",
+     "progress": str,
+     "result": { model_name, total_duration_minutes, total_size_mb,
+                 colab_url, drive_file_id, ... } | null,
+     "error": str | null }
+
+POST /training/import-model
+  FormData: model_name
+→ { "imported": [str], "model_name": str, "message": str }
+```
+
 ### Audio Serving
 
 ```
@@ -150,6 +188,29 @@ POST /audio/convert-to-mp3
   JSON: { "filename": str }
 → MP3 file download (Content-Disposition: attachment)
 ```
+
+---
+
+## Training Flow (One-Click)
+
+The simplified training flow for non-technical users:
+
+1. **Upload** — Drag-drop MP3/WAV files, name model, toggle audio source (full songs vs clean vocals)
+2. **Start Training** — Button triggers background pipeline:
+   - Saves files → runs Demucs (if needed, in background thread) → packages zip → uploads to Drive → returns Colab URL
+3. **Open Colab** — Button opens pre-configured notebook (auto-detects model from Drive folder)
+4. **Run All in Colab** — User clicks Runtime → Run all (30-60 min on T4 GPU)
+5. **Import Model** — Button scans Drive for .pth/.index, downloads to /models folder
+
+**Google Drive auth required once.** OAuth flow: popup → consent → token saved in `backend/token.pickle`.
+
+### Background Task System
+
+Heavy processing (Demucs) runs in `threading.Thread` with status polling:
+- `_training_tasks` dict (in-memory) stores task_id → { status, progress, result, error }
+- Frontend polls every 2s via `GET /training/start/status/{task_id}`
+- Server never blocks — health check stays responsive
+- Timeout: Demucs subprocess has 1800s (30 min) limit
 
 ---
 
@@ -184,23 +245,23 @@ POST /audio/convert-to-mp3
 
 ### Train.jsx
 
-**Section 1 — Upload & Prepare:**
-- Drag-drop zone for MP3/WAV files
-- Audio source toggle: "Full songs with music" (runs Demucs, slow) vs "Clean vocals only" (instant)
-- File list with size, remove button
-- "Prepare Vocals" button → POST /training/prepare
-- Result: duration, ready_for_training indicator, file list, errors
+**4-step wizard with step indicator:**
 
-**Section 2 — Package for Colab:**
-- "Package for Colab" button → POST /training/package
-- Package info: file count, size MB, duration minutes
-- Download .zip button
-- Step-by-step Drive upload instructions (numbered list)
-- "Open Custom Notebook" button → window.open(colab_url)
-- Instruction box: drop .pth/.index into /models folder
+| Step | State | Description |
+|---|---|---|
+| Upload | `upload` | Drop zone, model name input, audio source toggle, Start Training button |
+| Drive Auth | `drive-auth` | Google sign-in prompt (shown if not authenticated) |
+| Training | `training` | Progress spinner with live status message, polls task every 2s |
+| Colab | `colab` | "Open Colab" button + "Import Model" button |
+| Done | `done` | Success with "Go to Convert" + "Train Another" buttons |
+| Error | `error` | Persistent error screen with error message and suggestions |
 
-**Section 3 — Manual Training (Alternative):**
-- Link to standard RVC Colab notebook
+Key behaviors:
+- **Start Training** disabled when no files selected, auto-generates model name if blank
+- **Drive auth check** on mount, blocks training if not authenticated
+- **Polling** runs `GET /training/start/status/{task_id}` every 2s with 5s timeout
+- **Error handling** — shows persistent error screen with common causes (CPU timeout, format, etc.) instead of flash-toast + silent redirect
+- **Import model** — `POST /training/import-model`, scans Drive for .pth + .index
 
 ### Convert.jsx
 
@@ -216,10 +277,6 @@ Two-column layout:
   - F0 Method (rmvpe/crepe/harvest/pm)
 - Convert button (disabled without source + model)
 
-**Right column:**
-- Placeholder before conversion
-- After: audio player, stats (duration/model/pitch), Download WAV + Download MP3 buttons
-
 ### TTS.jsx
 
 Same two-column layout as Convert:
@@ -231,10 +288,6 @@ Same two-column layout as Convert:
 - Target Voice — model dropdown
 - RVC params (same 4 as Convert)
 - Generate Speech button
-
-**Right column:**
-- Placeholder before generation with "How it works" box
-- After: audio player, spoken text display, Download button
 
 ### Models.jsx
 
@@ -282,13 +335,6 @@ Dark mode: `class` strategy (always on via `<html class="dark">`).
 - Toast animation (slide in right, fade out)
 - Spinner (violet, 0.6s)
 
-```css
-input[type="range"].range-fill {
-  background: linear-gradient(to right, #7c3aed 0%, #7c3aed var(--fill),
-              #1a1a24 var(--fill), #1a1a24 100%);
-}
-```
-
 ### Component Patterns
 
 - Cards: `rounded-xl border border-forge-border bg-forge-card p-6`
@@ -307,11 +353,19 @@ input[type="range"].range-fill {
 def separate_vocals(input_path: str, output_dir: str) -> dict
 ```
 
-- Runs `python -m demucs --two-stems=vocals -n htdemucs -o {output_dir} {input_path}`
+- Runs `demucs_wrapper.py` (NOT `python -m demucs` directly) via subprocess
+- Wrapper monkey-patches `torchaudio.load` and `torchaudio.save` with soundfile to bypass torchcodec dependency
 - Output: `{output_dir}/htdemucs/{filename}/vocals.wav` and `no_vocals.wav`
 - Gets duration via `librosa.get_duration`
-- Timeout: 600s (10 min)
+- Timeout: 1800s (30 min) — CPU Demucs is slow
 - Errors: captures stderr, returns RuntimeError with details
+
+### demucs_wrapper.py
+
+Created to fix `torchcodec` import error with torchaudio 2.11+:
+- Patches `torchaudio.load` → soundfile read
+- Patches `torchaudio.save` → soundfile write (accepts **kwargs for encoding/bits_per_sample)
+- Must be used as subprocess entry point instead of `python -m demucs`
 
 ### rvc_engine.py
 
@@ -351,6 +405,19 @@ def package_for_colab(vocals_dir: str, output_dir: str) -> dict
 - Returns: zip_path, zip_name, file count, size MB, duration minutes
 - If no files: returns error message
 
+### google_drive.py
+
+OAuth + Drive operations module:
+- **OAuth flow:** PKCE code_verifier persisted in `.flow_cache/state_*.json` between auth URL and callback
+- **Auth URL:** `get_auth_url(redirect_uri)` → returns consent URL with state
+- **Callback:** `handle_callback(code, state, redirect_uri)` → exchanges code, saves token to `token.pickle`
+- **Token refresh:** Automatic via `google.auth.transport.requests.Request` refresh flow
+- **Folder management:** `get_voiceforge_root()` → creates/finds `VoiceForge/` folder, `get_model_folder(name)` → creates/finds subfolder
+- **Upload:** `upload_file(local_path, folder_id)` → resumable upload to Drive
+- **Scan:** `scan_model_folder(name)` → lists .pth + .index files under `VoiceForge/{name}/`
+- **Download:** `download_file(file_id, dest_path)` → downloads to local path
+- **Revoke:** `revoke_auth()` → deletes token.pickle
+
 ### utils.py
 
 ```python
@@ -368,28 +435,29 @@ def convert_to_mp3(wav_path, mp3_path, bitrate="192k") -> str
 
 ### Custom Notebook: `colab/voiceforge_train.ipynb`
 
-Auto-run notebook with form parameters. URL: `https://colab.research.google.com/github/QaziAbsaar/voice_banaow/blob/main/colab/voiceforge_train.ipynb`
+Auto-run notebook with form parameters.  
+URL: `https://colab.research.google.com/github/QaziAbsaar/voice_banaow/blob/main/colab/voiceforge_train.ipynb`
 
 **Notebook cells (Run All order):**
 
 | # | Cell | What it does |
 |---|---|---|
-| 1 | Form | `GDRIVE_FILE_ID` + `MODEL_NAME` params |
-| 2 | Mount Drive | `google.colab.drive.mount()` |
-| 3 | System deps | apt-get: libsndfile1-dev, ffmpeg, unzip |
-| 4 | Download data | gdown from Drive → unzip |
-| 5 | Clone RVC | git clone RVC-WebUI |
-| 6 | Install deps | pip install individual packages (skip fairseq) |
-| 7 | Pretrained | Download hubert, rmvpe, f0G40k, f0D40k from HuggingFace |
-| 8 | Preprocess | `preprocess.py` → resample to 16kHz |
-| 9 | Extract f0 | `extract_f0_print.py` |
-| 10 | Extract features | `extract_feature_print.py` on CUDA |
-| 11 | Train | `train.py` (30-60 min, T4 GPU) — args: -e, -sr 16000, -f0 1, -bs 4, -g 0, -te 100, -se 20 |
-| 12 | Generate index | `tools/infer/train-index.py` |
-| 13 | Export to Drive | Copy .pth + .index to `MyDrive/VoiceForge/{MODEL_NAME}/` |
+| 1 | **Settings** | `GDRIVE_FILE_ID` + `MODEL_NAME` params |
+| 2 | **Mount Drive** | `google.colab.drive.mount()` |
+| 3 | **Auto-detect** | If `MODEL_NAME` is default, scans `Drive/VoiceForge/` for latest folder |
+| 4 | System deps | apt-get: libsndfile1-dev, ffmpeg, unzip |
+| 5 | **Download** | Checks Drive for zip at `VoiceForge/{MODEL_NAME}/`, falls back to manual upload |
+| 6 | Clone RVC | `git clone RVC-WebUI` |
+| 7 | Install deps | pip install individual packages (skip fairseq) |
+| 8 | Pretrained | Download hubert, rmvpe, f0G40k, f0D40k from HuggingFace |
+| 9 | **Preprocess** | `preprocess.py` → resample to 16kHz |
+| 10 | Extract f0 | `extract_f0_print.py` |
+| 11 | Extract features | `extract_feature_print.py` on CUDA |
+| 12 | **Train** | `train.py` (30-60 min, T4 GPU) — args: -e, -sr 16000, -f0 1, -bs 4, -g 0, -te 100, -se 20 |
+| 13 | Generate index | `tools/infer/train-index.py` |
+| 14 | **Export to Drive** | Copy .pth + .index to `MyDrive/VoiceForge/{MODEL_NAME}/` |
 
-**Custom notebook URL in app:** `colab.research.google.com/github/QaziAbsaar/voice_banaow/blob/main/colab/voiceforge_train.ipynb`  
-**Standard RVC notebook URL:** `colab.research.google.com/github/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/blob/main/Retrieval_based_Voice_Conversion_WebUI_v2.ipynb`
+**Key feature:** Auto-detects model name from Drive folder (new cell after Drive mount). User just clicks Run All.
 
 ### Known RVC Repository Structure
 
@@ -397,14 +465,14 @@ After cloning RVC-WebUI:
 ```
 /content/RVC-WebUI/
 ├── infer/modules/train/
-│   ├── preprocess.py          # Resampling
+│   ├── preprocess.py              # Resampling
 │   ├── extract/extract_f0_print.py   # Pitch extraction
 │   ├── extract_feature_print.py      # Hubert feature extraction
-│   └── train.py               # Main training script
+│   └── train.py                   # Main training script
 ├── tools/infer/
-│   ├── train-index.py         # Index file generation
+│   ├── train-index.py             # Index file generation
 │   └── train-index-v2.py
-├── requirements.txt           # Pip deps (fairseq often fails — skip it)
+├── requirements.txt               # Pip deps (fairseq often fails — skip it)
 ```
 
 ### Training Parameters
@@ -428,7 +496,9 @@ After cloning RVC-WebUI:
 ### Core (requirements.txt)
 ```
 fastapi, uvicorn, python-multipart, demucs, librosa,
-soundfile, pydub, ffmpeg-python, numpy, aiofiles, gtts
+soundfile, pydub, ffmpeg-python, numpy, aiofiles, gtts,
+python-dotenv, google-auth-oauthlib, google-auth-httplib2,
+google-api-python-client
 ```
 
 ### Optional (manual install)
@@ -450,19 +520,33 @@ pip install TTS                  # XTTS voice cloning TTS (~2GB model)
 ```
 voiceforge/
 ├── backend/          # FastAPI + all Python engines
-├── colab/            # Custom Colab training notebook
-├── src/              # React frontend (pages + components)
-├── models/           # Drop .pth + .index files here
-├── audio_output/     # Converted WAV files served via /audio/
+│   ├── main.py           # FastAPI app + all routes
+│   ├── demucs_engine.py  # Demucs vocal separation (uses wrapper)
+│   ├── demucs_wrapper.py # torchaudio patch for soundfile backend
+│   ├── rvc_engine.py     # RVC voice conversion
+│   ├── tts_engine.py     # Text-to-speech (gTTS/XTTS)
+│   ├── colab_package.py  # Training data zip packaging
+│   ├── google_drive.py   # OAuth + Drive upload/scan/download
+│   ├── utils.py          # Audio utilities
+│   ├── requirements.txt
+│   ├── .env              # Google OAuth credentials
+│   ├── token.pickle      # Drive auth token (generated)
+│   └── .flow_cache/      # PKCE state cache (generated)
+├── colab/             # Custom Colab training notebook
+│   └── voiceforge_train.ipynb
+├── src/               # React frontend (pages + components)
+├── models/            # Drop .pth + .index files here
+├── audio_output/      # Converted WAV files served via /audio/
 ├── training_data/
-│   ├── raw/          # Uploaded source audio
-│   └── vocals/       # Demucs-extracted clean vocals
-├── temp/             # Temporary processing directory
-├── dist/             # Built frontend (npm run build)
+│   ├── raw/           # Uploaded source audio
+│   └── vocals/        # Demucs-extracted clean vocals
+├── temp/              # Temporary processing directory
+├── dist/              # Built frontend (npm run build)
 ├── package.json
 ├── vite.config.js
 ├── tailwind.config.js
 ├── index.html
+├── handsoff.md
 └── README.md
 ```
 
@@ -476,7 +560,7 @@ voiceforge/
 - [x] Health check polling (5s interval)
 - [x] Offline overlay for protected pages
 - [x] Model listing, deletion, refresh
-- [x] Demucs vocal separation
+- [x] Demucs vocal separation (via soundfile-patched wrapper)
 - [x] gTTS TTS pipeline
 - [x] Colab packaging + zip download
 - [x] Audio playback in browser
@@ -484,15 +568,27 @@ voiceforge/
 - [x] Custom Colab notebook with Run All
 - [x] Audio source toggle (has music / clean vocals)
 - [x] 404 page
+- [x] Google Drive OAuth (PKCE flow, token refresh)
+- [x] Drive upload / scan / download
+- [x] One-click training in background thread (no server blocking)
+- [x] Training status polling (2s interval with progress messages)
+- [x] Auto-import model from Drive to /models
+- [x] Colab notebook auto-detects model name from Drive folder
+- [x] Persistent error screen (instead of flash-toast + silent redirect)
 
 ### Needs Manual Setup
 - [ ] `pip install rvc-python` — required for Convert + TTS pages to work
 - [ ] Commit + push to GitHub — custom Colab notebook URL won't work until repo is public
+- [ ] Google Cloud Project OAuth consent screen — add test users for Drive auth
 
 ### Known Issues
-- Demucs is slow on CPU (2-5 min per song). GPU is 10x faster.
-- fairseq in RVC requirements.txt fails to build on Colab — must install deps individually
-- Electron removed. No file-system access from browser. "Open models folder" replaced with text instructions.
+- **Demucs is slow on CPU** (2-5 min per song). GPU is 10x faster. Timeout set to 30 min.
+- **torchcodec requires ffmpeg shared libs** — WSL2 doesn't have them. Workaround: `demucs_wrapper.py` patches torchaudio to use soundfile.
+- **torchaudio 2.11+ hard-requires torchcodec** — downgrading may help if ffmpeg shared libs are available.
+- **fairseq in RVC requirements.txt fails to build on Colab** — must install deps individually.
+- **Electron removed** — No file-system access from browser. "Open models folder" replaced with text instructions.
+- **Google OAuth** — App in testing mode, needs test user email whitelisted. Publish to production for public use.
+- **Colab URL** — `#model_name=xxx` fragment causes Colab JS crash. Removed — auto-detect from Drive instead.
 
 ---
 
@@ -503,7 +599,7 @@ voiceforge/
 git add -A
 
 # Commit
-git commit -m "feat: migrate from Electron to web app, add TTS + Colab packaging"
+git commit -m "feat: descriptive message"
 
 # Push (Colab notebook URL becomes live after push)
 git push origin main
